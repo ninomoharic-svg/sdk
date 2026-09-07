@@ -136,9 +136,10 @@ app.get('/auth', (req, res) => {
 });
 
 app.get('/auth/callback', async (req, res) => {
-  const { code, hmac, shop, ...rest } = req.query;
+  const { code, hmac, shop } = req.query;
   if (!code || shop !== SHOPIFY_STORE_DOMAIN) return res.status(400).send('Invalid callback');
 
+  const { hmac: _hmac, ...rest } = req.query;
   const message = Object.keys(rest)
     .sort()
     .map((key) => `${key}=${rest[key]}`)
