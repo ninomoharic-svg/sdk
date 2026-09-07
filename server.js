@@ -145,7 +145,6 @@ app.get('/auth/callback', async (req, res) => {
     .map((key) => `${key}=${rest[key]}`)
     .join('&');
   const digest = crypto.createHmac('sha256', SHOPIFY_API_SECRET).update(message).digest('hex');
-  console.log('OAuth callback debug:', { message, digest, hmac, secretLength: (SHOPIFY_API_SECRET || '').length });
   if (digest !== hmac) return res.status(401).send('Invalid HMAC');
 
   const resp = await fetch(`https://${SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token`, {
