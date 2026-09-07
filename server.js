@@ -96,6 +96,19 @@ function verifyProxySignature(req, res, next) {
 
 app.use('/proxy', verifyProxySignature);
 
+// TEMPORARY: verifies SHOPIFY_ADMIN_TOKEN actually works. Remove after testing.
+app.get('/debug-token-check', async (req, res) => {
+  try {
+    const resp = await fetch(`https://${SHOPIFY_STORE_DOMAIN}/admin/api/2024-10/shop.json`, {
+      headers: { 'X-Shopify-Access-Token': SHOPIFY_ADMIN_TOKEN },
+    });
+    const data = await resp.json();
+    res.json({ ok: resp.ok, shopName: data.shop ? data.shop.name : null, status: resp.status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // --- Verify webhook requests came from Shopify ---
 function verifyWebhookSignature(req, res, next) {
   const hmac = req.get('X-Shopify-Hmac-Sha256');
