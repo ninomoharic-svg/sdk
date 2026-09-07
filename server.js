@@ -26,8 +26,13 @@
 //
 // Env vars required:
 //   SHOPIFY_STORE_DOMAIN    e.g. bkjhti-kg.myshopify.com
-//   SHOPIFY_ADMIN_TOKEN     Admin API access token (custom app)
-//   SHOPIFY_API_SECRET      the custom app's API secret (app-proxy signing)
+//   SHOPIFY_CLIENT_ID       the app's Client ID (Dev Dashboard > App settings)
+//   SHOPIFY_ADMIN_TOKEN     Admin API access token — obtained by visiting
+//                           /auth once after deploying (see below), NOT
+//                           available as a static value in Shopify admin
+//                           for apps created via the new Dev Dashboard flow
+//   SHOPIFY_API_SECRET      the app's Client Secret (also used for
+//                           app-proxy signature verification)
 //   SHOPIFY_WEBHOOK_SECRET  webhook signing secret
 //   ADMIN_SECRET            a secret you invent, required as
 //                           "Authorization: Bearer <ADMIN_SECRET>" on
@@ -36,6 +41,16 @@
 //                           shopper, default 10
 //   REFERRAL_EARNING_PCT    % of order subtotal credited to the referrer,
 //                           default 10
+//
+// One-time OAuth step to obtain SHOPIFY_ADMIN_TOKEN:
+//   1. Deploy this server once (SHOPIFY_ADMIN_TOKEN can be blank so far).
+//   2. In the Dev Dashboard app config, add this server's
+//      "<host>/auth/callback" to Allowed redirection URL(s), and set
+//      App URL to "<host>/auth".
+//   3. Visit https://<host>/auth in a browser while logged into the store
+//      admin. It redirects through Shopify's consent screen and back to
+//      /auth/callback, which prints the access token on screen.
+//   4. Copy that token into SHOPIFY_ADMIN_TOKEN and redeploy.
 
 const express = require('express');
 const crypto = require('crypto');
@@ -43,6 +58,7 @@ const fetch = require('node-fetch');
 
 const {
   SHOPIFY_STORE_DOMAIN,
+  SHOPIFY_CLIENT_ID,
   SHOPIFY_ADMIN_TOKEN,
   SHOPIFY_API_SECRET,
   SHOPIFY_WEBHOOK_SECRET,
@@ -51,6 +67,8 @@ const {
   REFERRAL_EARNING_PCT = '10',
   PORT = 3000,
 } = process.env;
+
+const OAUTH_SCOPES = 'read_customers,write_customers,read_discounts,write_discounts,read_orders';
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -102,6 +120,48 @@ function verifyAdminSecret(req, res, next) {
 }
 
 app.use('/admin', verifyAdminSecret);
+
+// --- One-time OAuth flow to obtain an Admin API access token ---
+// (see the setup comment at the top of this file)
+app.get('/auth', (req, res) => {
+  const redirectUri = `https://${req.get('host')}/auth/callback`;
+  const state = crypto.randomBytes(16).toString('hex');
+  const authorizeUrl =
+    `https://${SHOPIFY_STORE_DOMAIN}/admin/oauth/authorize` +
+    `?client_id=${SHOPIFY_CLIENT_ID}` +
+    `&scope=${encodeURIComponent(OAUTH_SCOPES)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&state=${state}`;
+  res.redirect(authorizeUrl);
+});
+
+app.get('/auth/callback', async (req, res) => {
+  const { code, hmac, shop, ...rest } = req.query;
+  if (!code || shop !== SHOPIFY_STORE_DOMAIN) return res.status(400).send('Invalid callback');
+
+  const message = Object.keys(rest)
+    .sort()
+    .map((key) => `${key}=${rest[key]}`)
+    .join('&');
+  const digest = crypto.createHmac('sha256', SHOPIFY_API_SECRET).update(message).digest('hex');
+  if (digest !== hmac) return res.status(401).send('Invalid HMAC');
+
+  const resp = await fetch(`https://${SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: SHOPIFY_CLIENT_ID,
+      client_secret: SHOPIFY_API_SECRET,
+      code,
+    }),
+  });
+  const { access_token } = await resp.json();
+
+  res.send(
+    `<p>Copy this into the <code>SHOPIFY_ADMIN_TOKEN</code> environment variable, then redeploy:</p>` +
+    `<pre>${access_token}</pre>`
+  );
+});
 
 // --- Shopify Admin GraphQL helper ---
 async function adminGraphQL(query, variables) {
